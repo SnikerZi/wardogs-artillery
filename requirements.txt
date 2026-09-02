@@ -1,0 +1,14 @@
+# --- runtime ---------------------------------------------------------------
+numpy>=1.24
+mss>=9.0            # BitBlt screen capture (windowed / borderless fullscreen)
+Pillow>=10.0        # debug snapshots of the readout area
+
+# --- dev -------------------------------------------------------------------
+pytest>=7.0
+pyinstaller>=6.0
+
+# --- optional --------------------------------------------------------------
+# dxcam adds Desktop Duplication capture, needed only for exclusive-fullscreen
+# games. build.bat installs it best-effort: the app runs without it and says
+# so if the captured frame comes back black.
+#   py -3 -m pip install dxcam

@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+build/
+dist/
+#: PyInstaller regenerates the spec on every build; build.bat passes its
+#: flags directly, so the file is output, not source.
+*.spec
+#: Written next to the exe at runtime, per machine.
+config.json
+glyphs.json
+!src/wardogs_calc/vision/templates/glyphs.json
+debug/
+.pytest_cache/
