@@ -1,0 +1,64 @@
+{
+ "_note": [
+  "Terrain height grids for the elevation correction. One file per map.",
+  "",
+  "Heights are metres above each map's own lowest sample. The source",
+  "height field has no usable absolute datum -- it sits some 900 m below",
+  "anything a player would call an altitude -- but it is internally",
+  "consistent, and only differences between two points are ever used.",
+  "",
+  "Sampling: Landscape collision height field, 2 m spacing, taken every",
+  "4th vertex (8 m). Bilinear interpolation against the full 2 m data is",
+  "off by 0.13 m on average and 0.45 m at the 95th percentile.",
+  "",
+  "File format: lzma stream -> uint16 little-endian zigzag residuals,",
+  "row-major, ny rows of nx. Each sample predicts its left neighbour,",
+  "the first of each row predicts the row above:",
+  "  q[i][0] = q[i-1][0] + e[i][0],  q[i][j] = q[i][j-1] + e[i][j]",
+  "  height_m = height_min_m + q * quant_m",
+  "Row 0 is the lowest game Y, column 0 the lowest game X:",
+  "  game_x = x0 + j * step_units,  game_y = y0 + i * step_units"
+ ],
+ "maps": {
+  "bakurani": {
+   "label": "Bakurani",
+   "file": "bakurani.hgt",
+   "nx": 1531,
+   "ny": 1531,
+   "x0": 20.4,
+   "y0": 10.2,
+   "step_units": 0.08,
+   "height_min_m": 0.0,
+   "source_min_not_an_altitude": -1006.8694,
+   "quant_m": 0.05,
+   "relief_m": 1081.68,
+   "playable_bounds": {
+    "minX": 23.35,
+    "maxX": 133.6,
+    "minY": 19.34,
+    "maxY": 129.65
+   },
+   "sha256": "0c2c2d6e60c4c7e6e8653736312b0836a8ded8dfd6172c46d3d2b9c958232571"
+  },
+  "ozeti": {
+   "label": "Ozeti",
+   "file": "ozeti.hgt",
+   "nx": 1276,
+   "ny": 1148,
+   "x0": 49.38,
+   "y0": 11.86,
+   "step_units": 0.08,
+   "height_min_m": 0.0,
+   "source_min_not_an_altitude": -1017.7335,
+   "quant_m": 0.05,
+   "relief_m": 452.04,
+   "playable_bounds": {
+    "minX": 57.58,
+    "maxX": 143.07,
+    "minY": 21.81,
+    "maxY": 99.56
+   },
+   "sha256": "abc33f13dd747a578b012af82a90fd8828ffa2e033a752710c4beda6489e93f2"
+  }
+ }
+}

@@ -30,16 +30,25 @@ The SPH-2 has two arcs, so it shows two. Range and azimuth sit below: those
 you check, not enter. If an arc cannot reach, it says why instead of inventing
 a number.
 
+The elevation already accounts for the height difference between gun and
+target, which the game shows nowhere and which matters more than it sounds:
+Bakurani has a kilometre of relief, and half of all SPH-2 shots across it climb
+or drop over 100 m, worth tens of mils. Under the figure you get the range the
+table was read at once the slope moved it. Pick your map once under
+`⚙ → Terrain` — both maps use the same coordinates, so a reading cannot tell
+them apart.
+
 If the coordinates do not read on your setup, press **Area** once and drag a
 box around the chat line. Font templates for the HUD are already built in;
 **Train** is only there if your resolution renders them differently.
 
 ## Settings
 
-The `⚙` button opens five sections: **Hotkeys**, **Coordinates** (strictness,
-readout area, font training), **Screen capture**, **Appearance** (theme, five
-accents, opacity, 0.8–1.6× scale, always-on-top) and **Diagnostics**.
-Everything applies immediately.
+The `⚙` button opens six sections: **Hotkeys**, **Coordinates** (strictness,
+readout area, font training), **Terrain** (height correction on/off, which
+map), **Screen capture**, **Appearance** (theme, five accents, opacity,
+0.8–1.6× scale, always-on-top) and **Diagnostics**. Everything applies
+immediately.
 
 **Rebinding:** click the button showing the current key and press what you
 want. Mouse buttons work too — side, middle, right, wheel. Hold
@@ -63,7 +72,8 @@ dy = (y2 - y1) * 100
 range     = hypot(dx, dy)
 azimuth   = atan2(dx, dy)                  # 0° = north (+Y), clockwise
 mil       = azimuth * 6400 / 360           # NATO mils
-elevation = interpolate(firing table, range, weapon, arc)
+dz        = height(target) - height(gun)   # from the terrain, see below
+elevation = interpolate(firing table, equivalent_range(range, dz), weapon, arc)
 ```
 
 | Weapon | Working range | Elevation | Arcs |
@@ -74,7 +84,59 @@ elevation = interpolate(firing table, range, weapon, arc)
 Elevation figures are community measurements — nothing official was ever
 published, so re-check them after a game patch and edit
 [`firing_tables.json`](src/wardogs_calc/firing_tables.json) to suit. The
-format is `[range_m, mil]`, in any order.
+format is `[range_m, mil]`, in any order. Each weapon's `model` block is
+fitted to its own rows, so re-measuring the table means refitting the model
+with it.
+
+### Height
+
+The tables were measured on level ground and are keyed on horizontal range, so
+by themselves they answer the wrong question. Bakurani has 1082 m of relief:
+sample random gun/target pairs across it at the ranges the SPH-2 covers and the
+median height difference is 109 m, the top tenth over 320 m. At 1800 m a 100 m
+climb is worth about 33 mil — far more than the tables' own precision.
+
+Heights come from the terrain itself. The game's Landscape collision height
+field carries no usable absolute datum — it sits some 900 m below anything a
+player would call an altitude — but it is internally consistent, and only the
+difference between two points is ever used. It is sampled every 8 m, stored per
+map relative to that map's own lowest point, and takes 3 MB for both maps.
+Interpolating that grid instead of the full 2 m data is off by 0.13 m on
+average and 0.45 m at the 95th percentile: under half a mil.
+
+Turning a height difference into an elevation needs a trajectory, which no
+table can supply, so the projectile is modelled: a point mass under gravity and
+quadratic air drag. Its constants were not guessed but recovered from the
+firing tables themselves. Left free, the drag exponent came out at 1.99, which
+is the strongest sign the shape of the model is right; the SPH-2's two arcs,
+which one set of constants has to satisfy at once, then pin the rest down to a
+single answer — 226.0 m/s and a drag coefficient of 2.87e-4 per metre,
+reproducing all 139 rows of both arcs to 2.6 m.
+
+The model never supplies the elevation. It answers one question — *what level
+shot needs the same dial as this sloped one?* — and the elevation is read from
+the table at that **equivalent range**:
+
+```
+elevation = table( equivalent_range(range, dz) )
+```
+
+A level shot's equivalent range is its own, so nothing about the old behaviour
+changes; uphill reads longer, downhill shorter, and the figure is shown under
+the elevation. Anchoring this way keeps the fit's few metres of range error out
+of the answer, because it cancels between the sloped shot and the level one it
+is measured against. Whether the gun will fire at all is judged on the
+equivalent range too, since that is what the dial is set to — so a target
+below you can sit past the flat maximum and still be reachable, and one above
+you can be inside it and not be.
+
+The correction was cross-checked against
+[apollyon-sys/wardogs-calculator](https://github.com/apollyon-sys/wardogs-calculator),
+which derived the same relationship independently by numerical integration.
+Their firing tables are byte-identical to these, and where their data is
+confident the two agree to 1.9 mil on the low arc and 2.9 mil on the high one.
+The remaining difference is systematic, about 8% of the correction, and settling
+it needs a shot measured in the game rather than more arithmetic.
 
 ### Reading the coordinates
 
@@ -145,6 +207,7 @@ start: screen (2560, 1440), standard user, config ...\config.json
   hotkeys f1 / f2 / f3, weapon mortar
   font: 135 templates in ['wardogs'], characters .0123456789xy, margin 0.05
   area (358, 475, 665, 187), saved None, default [0.14, ...]
+  height correction on, Bakurani 1531x1531 at 8 m, X 20.40..142.80 Y 10.20..132.60
 hotkey: gun
 read: area (358, 475, 665, 187) - default, screen (2560, 1440)
   read X 98.49  Y 110.30 in 21 ms (text 'x98.49, y110.30', font wardogs, ...)
@@ -165,20 +228,37 @@ py -3 -m pytest tests/ -q
 main.py                     entry point, also PyInstaller's
 src/wardogs_calc/
   ballistics.py             range, azimuth, mils, firing tables
-  firing_tables.json        the tables (edit here)
+  firing_tables.json        the tables and each weapon's model (edit here)
+  trajectory.py             the projectile model behind the height correction
+  terrain.py                height lookup
+  terrain/                  height grids, 8 m, one file per map (3 MB)
   capture.py                screen capture, two backends
   hotkeys.py                pass-through WH_KEYBOARD_LL / WH_MOUSE_LL hooks
   reader.py                 capture + recognition
   config.py                 portable config.json
   vision/                   binarisation, segmentation, glyph matching
   ui/                       window, settings, theme, widgets, trainer
-tests/                      165 tests
+tests/                      202 tests
 ```
 
 ## Limits
 
-- Height difference between gun and target is ignored: the game does not show
-  it and the tables are keyed on horizontal range.
+- Pick the right map under `⚙ → Terrain`. Both maps use the same coordinate
+  scale, so a reading cannot say which one you are on, and the height it is
+  read against comes from whichever map is selected. A point outside the
+  selected map's area says so instead of guessing.
+- The height correction is as good as the model behind it, which is a fit to
+  the same community tables rather than anything measured in the game. The
+  SPH-2's two arcs pin its model to a single answer. The mortar has one arc,
+  which cannot separate muzzle speed from drag: fits from 146 to 214 m/s match
+  its table equally well, and they disagree by 40% on how large a correction
+  to apply. They agree on the direction and the rough size, so the mortar's
+  correction is worth having and is not settled to the last mil. Both weapons
+  beat ignoring the height, which is what a bare table does.
+- Vehicle tilt is not corrected. On the SPH-2, park level: the two markers
+  either side of the silhouette under `STABILIZED / ASL` in the gunner HUD
+  show lateral tilt, and a slope under the tracks moves the shot in a way no
+  map data can see.
 - The window is frameless, so it does not appear in the taskbar or Alt+Tab.
   Collapse it with `▴`.
 - The left mouse button cannot be bound; it operates the app itself.
@@ -187,3 +267,12 @@ tests/                      165 tests
 
 MIT — see [`LICENSE`](LICENSE). Not affiliated with or endorsed by BULKHEAD or
 the WARDOGS development team.
+
+The MIT licence covers this project's own code. The height grids under
+[`src/wardogs_calc/terrain/`](src/wardogs_calc/terrain/) are decimated from
+WARDOGS terrain data, extracted and published by
+[apollyon-sys/wardogs-calculator](https://github.com/apollyon-sys/wardogs-calculator)
+(MIT for its code, which explicitly does not extend to game-derived material).
+That data remains the property of its copyright holders and is included here on
+the same footing: unofficial, fan-made, and claiming no ownership of anything
+belonging to WARDOGS.

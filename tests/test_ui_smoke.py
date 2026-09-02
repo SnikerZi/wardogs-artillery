@@ -153,3 +153,83 @@ def test_a_box_that_reads_is_kept_without_complaint(app, monkeypatch):
     app._pick_region()
     assert app.cfg.readout_region == [10, 20, 200, 60]
     assert app._status[1] == "accent"
+
+
+# --- the height correction in the window -----------------------------------
+
+
+def test_the_meta_line_reports_the_height_difference(app):
+    app.gun = Point(60.0, 60.0)
+    app.target = Point(70.0, 70.0)
+    app.cfg.terrain_correction = True
+    app.cfg.terrain_map = "bakurani"
+    app._refresh()
+    app.update()
+    text = app.meta_label.cget("text")
+    assert "above the gun" in text or "below the gun" in text
+    assert "azimuth" in text
+
+
+def test_turning_the_correction_off_drops_the_height_line(app):
+    app.gun = Point(60.0, 60.0)
+    app.target = Point(70.0, 70.0)
+    app.cfg.terrain_correction = False
+    app._refresh()
+    app.update()
+    text = app.meta_label.cget("text")
+    assert "the gun" not in text
+    app.cfg.terrain_correction = True
+
+
+def test_a_point_off_the_chosen_map_says_which_and_offers_the_setting(app):
+    """Ozeti does not reach X 25, so picking it there has to be visible."""
+    app.gun = Point(25.0, 60.0)
+    app.target = Point(30.0, 60.0)
+    app.cfg.terrain_correction = True
+    app.cfg.terrain_map = "ozeti"
+    app._refresh()
+    app.update()
+    text = app.meta_label.cget("text")
+    assert "outside Ozeti" in text
+    assert "⚙" in text
+    app.cfg.terrain_map = "bakurani"
+
+
+def test_the_dialled_range_is_shown_when_the_slope_moves_it(app):
+    app.gun = Point(60.0, 60.0)
+    app.target = Point(70.0, 70.0)
+    app.cfg.terrain_correction = True
+    app.cfg.terrain_map = "bakurani"
+    app.cfg.weapon = "sph2"
+    app._refresh()
+    app.update()
+    labels = _all_text(app.solution_frame)
+    assert any("dialled as" in text for text in labels)
+    app.cfg.weapon = Config().weapon
+
+
+def test_the_terrain_switch_is_in_the_settings_page(app):
+    app._toggle_settings()
+    app.update()
+    assert any("Height correction" in text for text in _all_text(app))
+    assert any("TERRAIN" in text for text in _all_text(app))
+
+
+def _all_text(widget):
+    out = []
+    for child in widget.winfo_children():
+        try:
+            out.append(str(child.cget("text")))
+        except tk.TclError:
+            pass
+        out.extend(_all_text(child))
+    return out
+
+
+def test_escape_on_the_main_page_after_visiting_settings(app):
+    """Esc cancels a recording; it used to reach for the destroyed recorders."""
+    app._toggle_settings()
+    app.update()
+    app._toggle_settings()
+    app.update()
+    app._cancel_recording()

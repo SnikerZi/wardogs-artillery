@@ -25,6 +25,7 @@ py -3 -m PyInstaller ^
   --icon src/wardogs_calc/icon.ico ^
   --add-data "src/wardogs_calc/icon.ico;wardogs_calc" ^
   --add-data "src/wardogs_calc/firing_tables.json;wardogs_calc" ^
+  --add-data "src/wardogs_calc/terrain;wardogs_calc/terrain" ^
   --add-data "src/wardogs_calc/vision/templates;wardogs_calc/vision/templates" ^
   --collect-submodules mss ^
   %DXCAM_FLAG% ^

@@ -79,6 +79,15 @@ class Config:
     #: exposed in case a future map is scaled differently.
     metres_per_unit: float = 100.0
 
+    # --- terrain -----------------------------------------------------------
+    #: Correct the elevation for the height difference between gun and target.
+    #: Off solves for level ground, which is what the bare firing tables say.
+    terrain_correction: bool = True
+    #: Which map's height grid to read, keyed into terrain/index.json. The two
+    #: maps share the same coordinate space, so a pair of coordinates cannot
+    #: say which one you are on -- it has to be set, and it is remembered.
+    terrain_map: str = "bakurani"
+
     # --- ui ---------------------------------------------------------------
     always_on_top: bool = True
     opacity: float = 0.96

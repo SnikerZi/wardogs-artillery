@@ -26,6 +26,7 @@ from ..hotkeys import (
     pretty_hotkey,
 )
 from ..reader import CoordinateReader
+from ..terrain import available_maps, load as load_terrain
 from ..vision.ocr import recognise_text
 from .region_select import select_region
 from .theme import ACCENTS, Theme
@@ -45,6 +46,9 @@ from .widgets import (
 )
 
 BACKENDS = [("auto", "Auto"), ("bitblt", "BitBlt"), ("dxgi", "DXGI")]
+#: Maps that ship with a height grid. Empty if the grids are missing, in
+#: which case the Terrain section is left out and every solution is level.
+MAPS = list(available_maps().items())
 THEMES = [("dark", "Dark"), ("light", "Light")]
 
 #: Label -> minimum match margin. Stricter refuses more, misreads less. The
@@ -120,6 +124,19 @@ class App(tk.Tk):
             f"saved {self.cfg.readout_region}, "
             f"default {self.cfg.chat_region_rel}"
         )
+        if not self.cfg.terrain_correction:
+            log("  height correction off, level-ground tables only")
+        else:
+            grid = load_terrain(self._terrain_key())
+            if grid is None:
+                log(f"  height correction on but {self._terrain_key()} has no grid")
+            else:
+                log(
+                    f"  height correction on, {grid.label} "
+                    f"{grid.grid.shape[1]}x{grid.grid.shape[0]} at "
+                    f"{grid.step * self.cfg.metres_per_unit:.0f} m, "
+                    f"X {grid.x0:.2f}..{grid.x1:.2f} Y {grid.y0:.2f}..{grid.y1:.2f}"
+                )
 
     # ==================================================================
     # construction
@@ -128,6 +145,10 @@ class App(tk.Tk):
         t = self.theme
         for child in self.root.winfo_children():
             child.destroy()
+        # The recorders live on the settings page only, and the line above has
+        # just destroyed them. Leaving them listed made Esc on the main page --
+        # which cancels any recording in progress -- reach for dead widgets.
+        self.recorders: dict[str, HotkeyRecorder] = {}
         self.configure(bg=t.bg)
         self.root.configure(bg=t.bg)
 
@@ -367,6 +388,28 @@ class App(tk.Tk):
             FlatButton(buttons, t, text, command, width=170, height=28, font_size=8).pack(
                 side="left", expand=True, padx=t.px(2)
             )
+
+        # --- terrain ----------------------------------------------------
+        # Left out entirely when no height grid shipped: a switch that cannot
+        # do anything is worse than no switch.
+        if MAPS:
+            card = self._section(body, "Terrain")
+            row = Row(
+                card, t, "Height correction",
+                "Corrects the elevation for the climb or drop to the target, "
+                "which the game never shows you",
+            )
+            row.pack(fill="x")
+            Toggle(row, t, self.cfg.terrain_correction, self._on_terrain_toggle).pack(
+                side="right"
+            )
+            row = Row(card, t, "Map", "Both maps use the same coordinates, so a "
+                                      "reading cannot say which one it is")
+            row.pack(fill="x", pady=(t.px(10), 0))
+            Segmented(
+                row, t, MAPS, self._terrain_key(), self._on_terrain_map,
+                width=200, height=28, font_size=8,
+            ).pack(side="right")
 
         # --- capture ----------------------------------------------------
         card = self._section(body, "Screen capture")
@@ -727,6 +770,26 @@ class App(tk.Tk):
         self.cfg.save()
         self._refresh()
 
+    def _terrain_key(self) -> str:
+        if MAPS and self.cfg.terrain_map not in dict(MAPS):
+            self.cfg.terrain_map = MAPS[0][0]
+        return self.cfg.terrain_map
+
+    def _on_terrain_map(self, key: str) -> None:
+        self.cfg.terrain_map = key
+        self.cfg.save()
+        self._refresh()
+
+    def _on_terrain_toggle(self, value: bool) -> None:
+        self.cfg.terrain_correction = value
+        self.cfg.save()
+        self._set_status(
+            "Height correction on" if value
+            else "Height correction off — level-ground tables only",
+            "muted",
+        )
+        self._refresh()
+
     def _strictness_key(self) -> str:
         current = self.cfg.match_margin
         return min(STRICTNESS_VALUES, key=lambda k: abs(STRICTNESS_VALUES[k] - current))
@@ -900,6 +963,16 @@ class App(tk.Tk):
             tk.Label(figure, text="mil", bg=t.surface, fg=t.muted, font=t.sans(11)).pack(
                 side="left", anchor="s", padx=(t.px(5), 0), pady=(0, t.px(6))
             )
+            # Where the table was read once the slope moved it. Each arc gets
+            # its own figure -- the two trajectories climb differently -- and a
+            # level shot reads at its own range, so there is nothing to add.
+            equivalent = sol.equivalent_range_m
+            if equivalent is not None and abs(equivalent - mission.range_m) >= 1.0:
+                shown = f"{equivalent:,.0f}".replace(",", " ")
+                tk.Label(
+                    column, text=f"dialled as {shown} m", bg=t.surface, fg=t.faint,
+                    font=t.sans(8), anchor="w",
+                ).pack(fill="x")
 
     def _refresh(self) -> None:
         t = self.theme
@@ -920,17 +993,51 @@ class App(tk.Tk):
             self._fit()
             return
 
+        height_gain, height_note = self._height_gain()
         mission = solve(
-            self.gun, self.target, self.weapons[self.cfg.weapon], self.cfg.metres_per_unit
+            self.gun, self.target, self.weapons[self.cfg.weapon],
+            self.cfg.metres_per_unit, height_gain,
         )
         self._paint_solutions(mission)
         distance = f"{mission.range_m:,.0f}".replace(",", " ")
-        self.meta_label.config(
-            text=f"{distance} m   ·   azimuth {mission.azimuth_deg:.2f}°"
-                 f"   ·   {mission.azimuth_mil:.0f} mil",
-            fg=t.text,
-        )
+        lines = [
+            f"{distance} m   ·   azimuth {mission.azimuth_deg:.2f}°"
+            f"   ·   {mission.azimuth_mil:.0f} mil"
+        ]
+        if height_gain is not None:
+            if abs(height_gain) < 0.5:
+                lines.append("target level with the gun")
+            else:
+                lines.append(
+                    f"target {abs(height_gain):,.0f} m "
+                    f"{'above' if height_gain > 0 else 'below'} the gun".replace(",", " ")
+                )
+        elif height_note:
+            lines.append(height_note)
+        self.meta_label.config(text="\n".join(lines), fg=t.text)
         self._fit()
+
+    def _height_gain(self) -> tuple[float | None, str]:
+        """Target height above the gun, or None with a reason it is missing.
+
+        None means the solution falls back to level ground, which the caller
+        shows rather than passing off as a corrected one.
+        """
+        if not (MAPS and self.cfg.terrain_correction):
+            return None, ""
+        if not (self.gun and self.target):
+            return None, ""
+        grid = load_terrain(self._terrain_key())
+        if grid is None:
+            return None, "height data for this map is missing — level ground assumed"
+        gun_h = grid.height_at(self.gun.x, self.gun.y)
+        target_h = grid.height_at(self.target.x, self.target.y)
+        if gun_h is None or target_h is None:
+            off = "gun" if gun_h is None else "target"
+            return None, (
+                f"the {off} is outside {grid.label} — wrong map picked in ⚙?"
+            )
+        return target_h - gun_h, ""
 
     # ==================================================================
     def close(self) -> None:

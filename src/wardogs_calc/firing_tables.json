@@ -1,7 +1,12 @@
 {
  "_note": [
   "Community-measured range -> elevation tables; nothing official was published.",
-  "Add your own measurements here; format is [range_m, mil], any order."
+  "Add your own measurements here; format is [range_m, mil], any order.",
+  "",
+  "Each weapon also carries a `model`: the projectile constants recovered from",
+  "its own table, used to correct the elevation for the height difference",
+  "between gun and target. Re-measure the table after a patch and the model",
+  "has to be refitted with it -- it is derived from these rows, not measured."
  ],
  "weapons": {
   "mortar": {
@@ -9,6 +14,41 @@
    "short": "Mortar",
    "min_range_m": 132.0,
    "max_range_m": 684.0,
+   "model": {
+    "_note": [
+     "Fitted only inside the envelope: the dial stops at 850 and 150, and the",
+     "rows past those refuse to sit on the same trajectory family -- including",
+     "them costs a factor of seventeen in residual (9.20 m against 0.54 m).",
+     "Quadratic drag is not assumed here but carried over from the SPH-2, where",
+     "two arcs made the exponent measurable.",
+     "",
+     "One arc cannot separate muzzle speed from drag, and it shows: fits from",
+     "v0 = 146 to 214 m/s match these rows equally well, which is a 40% spread",
+     "in how large a correction they imply. This is the best of them (lowest",
+     "residual), and the whole family agrees on the direction and the rough size",
+     "-- but the mortar's correction is not settled to the last mil, and only a",
+     "shot measured in the game against a known height difference would settle",
+     "it. The SPH-2 has no such ambiguity.",
+     "",
+     "launch angle (rad) = mil_to_rad * dial + mil_zero_rad. The dial is",
+     "not the barrel angle, so neither number means anything on its own.",
+     "Used only to convert a sloped shot into the level shot that needs",
+     "the same dial; see trajectory.py."
+    ],
+    "v0_ms": 155.863,
+    "drag_k_per_m": 0.001603324,
+    "mil_to_rad": 0.000813743,
+    "mil_zero_rad": 0.7854565,
+    "fit": {
+     "rows": 71,
+     "fitted_on": "the rows inside min_range_m..max_range_m",
+     "range_m": [
+      132,
+      684
+     ],
+     "rms_m": 0.529
+    }
+   },
    "arcs": [
     {
      "name": "High angle",
@@ -358,6 +398,31 @@
    "short": "SPH-2",
    "min_range_m": 780.0,
    "max_range_m": 2629.0,
+   "model": {
+    "_note": [
+     "Recovered from the two arcs above, which one set of constants has to",
+     "satisfy at once. Left free, the drag exponent came out at 1.99, so it",
+     "is pinned at 2 -- plain quadratic drag -- and everything else refitted.",
+     "",
+     "launch angle (rad) = mil_to_rad * dial + mil_zero_rad. The dial is",
+     "not the barrel angle, so neither number means anything on its own.",
+     "Used only to convert a sloped shot into the level shot that needs",
+     "the same dial; see trajectory.py."
+    ],
+    "v0_ms": 226.0303,
+    "drag_k_per_m": 0.000286875747,
+    "mil_to_rad": 0.000927687,
+    "mil_zero_rad": 0.1253813,
+    "fit": {
+     "rows": 139,
+     "fitted_on": "both arcs, every row",
+     "range_m": [
+      735,
+      2629
+     ],
+     "rms_m": 2.561
+    }
+   },
    "arcs": [
     {
      "name": "Low arc",
