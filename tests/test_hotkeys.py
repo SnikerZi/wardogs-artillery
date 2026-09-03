@@ -104,17 +104,27 @@ def test_function_keys_and_mouse_buttons_are_safe():
         assert not edits_text(spec), spec
 
 
+def _default_specs(config: Config) -> list[str]:
+    return [
+        getattr(config, name)
+        for name in vars(config)
+        if name.startswith("hotkey_")
+    ]
+
+
 def test_the_shipped_defaults_leave_the_chat_line_alone():
     config = Config()
-    for spec in (config.hotkey_gun, config.hotkey_target, config.hotkey_reset):
+    for spec in _default_specs(config):
         assert not edits_text(spec), spec
         parse_hotkey(spec)
 
 
+def test_the_shipped_defaults_do_not_clash():
+    # The settings page refuses a spec already bound elsewhere, which would
+    # make one of the defaults unbindable rather than merely odd.
+    specs = _default_specs(Config())
+    assert len(specs) == len(set(specs)) == 4
+
+
 def test_the_defaults_avoid_steams_screenshot_key():
-    config = Config()
-    assert "f12" not in {
-        config.hotkey_gun,
-        config.hotkey_target,
-        config.hotkey_reset,
-    }
+    assert "f12" not in _default_specs(Config())

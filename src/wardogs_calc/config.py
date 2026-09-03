@@ -38,6 +38,10 @@ class Config:
     hotkey_gun: str = "f1"
     hotkey_target: str = "f2"
     hotkey_reset: str = "f3"
+    #: Switches between the panel and the transparent overlay. The overlay has
+    #: no title bar to click and can be made click-through, so this is the one
+    #: way back out of it that always works.
+    hotkey_hud: str = "f4"
 
     # --- what we shoot with ---------------------------------------------
     #: Key into firing_tables.json: "mortar" or "sph2".
@@ -100,6 +104,32 @@ class Config:
     ui_scale: float = 1.0
     #: Collapsed to just the range readout.
     compact: bool = False
+
+    # --- transparent overlay (HUD) ----------------------------------------
+    #: Draw bare text on a colour-keyed background instead of the panel, so
+    #: the figures can sit on top of the game. Roughly a tenth of the area.
+    hud: bool = False
+    #: Let every click reach the game. The keyed background passes clicks on
+    #: by itself; this covers the glyphs too, at the price of not being able
+    #: to drag the overlay -- hotkey_hud is then the way back to the panel.
+    hud_click_through: bool = True
+    #: The overlay's own alpha. Separate from `opacity`: bare text needs more
+    #: of it than a panel does, and the panel's setting is about not hiding
+    #: the game behind a slab.
+    hud_opacity: float = 0.92
+    #: Text size, on top of `ui_scale`. The panel's scale is about matching
+    #: the desktop; this is about how much of the game the figures may cover,
+    #: which is a different question with a different answer.
+    hud_size: float = 1.0
+    #: Put the measurements on the end of the big row instead of under it.
+    #: Wider, a third shorter.
+    hud_one_line: bool = False
+    #: Which figures the overlay shows. Elevation is what you dial, but the
+    #: range and azimuth alone are a legitimate -- and much smaller -- HUD.
+    hud_show_elevation: bool = True
+    hud_show_range: bool = True
+    hud_show_azimuth: bool = True
+    hud_show_height: bool = True
 
     # --- diagnostics -------------------------------------------------------
     debug_dumps: bool = False

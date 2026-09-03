@@ -310,6 +310,11 @@ class Toggle(_Painted):
             self._anim = None
 
         def step() -> None:
+            # A toggle whose command rebuilds the page is destroyed mid-slide,
+            # and a repaint on a dead canvas is a traceback in the console.
+            if not self.winfo_exists():
+                self._anim = None
+                return
             delta = target - self._pos
             if abs(delta) < 0.02:
                 self._pos = target
@@ -450,6 +455,116 @@ class Segmented(_Painted):
             self.create_text(
                 x0 + cell / 2, h / 2 + 1, text=label, fill=ink,
                 font=t.sans(self._font_size, "bold" if selected else "normal"),
+            )
+
+
+# ---------------------------------------------------------------------------
+class ChipRow(_Painted):
+    """Independent on/off chips in one row.
+
+    Where Segmented picks one of a set, this switches each on its own -- four
+    of them read as one question ("what is shown?") in a quarter of the
+    height four labelled toggles would need.
+    """
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        theme: Theme,
+        options: Sequence[tuple[str, str]],
+        values: dict[str, bool],
+        command: Callable[[str, bool], None],
+        height: int = 28,
+        font_size: int = 8,
+        width: int = 230,
+    ) -> None:
+        self._chips = list(options)
+        self._values = dict(values)
+        self._command = command
+        self._height = height
+        self._font_size = font_size
+        self._hover_index = -1
+        self._font: tkfont.Font | None = None
+        super().__init__(parent, theme, theme.px(width), theme.px(height))
+        self.bind("<Button-1>", self._on_click)
+        self.bind("<Motion>", self._on_motion)
+        self.bind("<Leave>", self._on_leave)
+        self.configure(cursor="hand2")
+        self.repaint()
+
+    def _label_font(self) -> tkfont.Font:
+        if self._font is None:
+            self._font = tkfont.Font(root=self, font=self.theme.sans(self._font_size))
+        return self._font
+
+    def _bounds(self) -> list[tuple[float, float]]:
+        """Left and right edge of each chip.
+
+        Proportional to the label rather than an equal share of the row: an
+        equal share clips the longest label, which is the one that most
+        needed the room.
+        """
+        w, _h = self.size()
+        font = self._label_font()
+        widths = [font.measure(label) + self.theme.px(18) for _key, label in self._chips]
+        total = sum(widths) or 1
+        edges, x = [], 0.0
+        for width in widths:
+            edges.append((x, x + w * width / total))
+            x = edges[-1][1]
+        return edges
+
+    def _index_at(self, x: int) -> int:
+        for index, (x0, x1) in enumerate(self._bounds()):
+            if x0 <= x < x1:
+                return index
+        return len(self._chips) - 1 if self._chips else -1
+
+    def _on_click(self, event: tk.Event) -> None:
+        index = self._index_at(event.x)
+        if index < 0:
+            return
+        key = self._chips[index][0]
+        self._values[key] = not self._values.get(key, False)
+        self.repaint()
+        self._command(key, self._values[key])
+
+    def _on_motion(self, event: tk.Event) -> None:
+        index = self._index_at(event.x)
+        if index != self._hover_index:
+            self._hover_index = index
+            self.repaint()
+
+    def _on_leave(self, _e=None) -> None:
+        self._hover_index = -1
+        self.repaint()
+
+    def set_theme(self, theme: Theme) -> None:
+        self.theme = theme
+        self._font = None
+        self.configure(bg=self.master.cget("bg"), height=theme.px(self._height))
+        self.repaint()
+
+    def repaint(self) -> None:
+        self.delete("all")
+        if not self._chips:
+            return
+        t = self.theme
+        _w, h = self.size()
+        gap = t.px(3)
+        for i, ((key, label), (left, right)) in enumerate(zip(self._chips, self._bounds())):
+            on = self._values.get(key, False)
+            x0 = left + gap
+            x1 = right - gap
+            if on:
+                fill, outline, ink = t.accent, t.accent, t.accent_text
+            else:
+                fill = t.surface_hi if i == self._hover_index else t.surface
+                outline, ink = t.border, t.muted
+            round_rect(self, x0, 0, x1, h, t.px(6), fill=fill, outline=outline)
+            self.create_text(
+                (x0 + x1) / 2, h / 2 + 1, text=label, fill=ink,
+                font=t.sans(self._font_size, "bold" if on else "normal"),
             )
 
 

@@ -13,7 +13,7 @@ from tkinter import messagebox
 from typing import Callable
 
 from .. import __version__
-from ..ballistics import Point, Weapon, load_weapons, solve
+from ..ballistics import FireMission, Point, Solution, Weapon, load_weapons, solve
 from ..capture import Region, ScreenCapture
 from ..config import Config, base_dir, resource_dir
 from ..diagnostics import log, log_path
@@ -28,11 +28,13 @@ from ..hotkeys import (
 from ..reader import CoordinateReader
 from ..terrain import available_maps, load as load_terrain
 from ..vision.ocr import recognise_text
+from .hud import KEY as HUD_KEY, Hud, set_click_through
 from .region_select import select_region
 from .theme import ACCENTS, Theme
 from .trainer import train_from_crop
 from .widgets import (
     Card,
+    ChipRow,
     FlatButton,
     HotkeyRecorder,
     IconButton,
@@ -57,6 +59,24 @@ THEMES = [("dark", "Dark"), ("light", "Light")]
 STRICTNESS = [("strict", "Strict"), ("normal", "Normal"), ("loose", "Loose")]
 STRICTNESS_VALUES = {"strict": 0.10, "normal": 0.05, "loose": 0.02}
 
+#: Every binding, in the order the settings page lists them. One tuple so
+#: that adding a hotkey cannot half-register: clash checks, the rebind and
+#: the typing warning all read it.
+HOTKEYS = (
+    ("hotkey_gun", "Gun position", None),
+    ("hotkey_target", "Target position", None),
+    ("hotkey_reset", "Clear both points", None),
+    ("hotkey_hud", "Overlay on / off", "Always works, even click-through"),
+)
+
+#: What the overlay may show, as (config flag, label).
+HUD_FIELDS = (
+    ("hud_show_elevation", "Elevation"),
+    ("hud_show_range", "Range"),
+    ("hud_show_azimuth", "Azimuth"),
+    ("hud_show_height", "Height"),
+)
+
 WINDOW_WIDTH = 400
 
 
@@ -79,6 +99,7 @@ class App(tk.Tk):
 
         self.gun: Point | None = None
         self.target: Point | None = None
+        self.hud: Hud | None = None
         self.page = "main"
         self._status: tuple[str, str] = ("", "muted")
         self._drag_origin: tuple[int, int] | None = None
@@ -113,8 +134,15 @@ class App(tk.Tk):
         )
         log(
             f"  hotkeys {self.cfg.hotkey_gun} / {self.cfg.hotkey_target} / "
-            f"{self.cfg.hotkey_reset}, weapon {self.cfg.weapon}"
+            f"{self.cfg.hotkey_reset} / {self.cfg.hotkey_hud}, "
+            f"weapon {self.cfg.weapon}"
         )
+        if self.cfg.hud:
+            log(
+                f"  overlay on, "
+                f"{'click-through' if self.cfg.hud_click_through else 'clickable'}, "
+                f"alpha {self.cfg.hud_opacity}, size {self.cfg.hud_size}"
+            )
         log(
             f"  font: {len(self.reader.glyphs)} templates in "
             f"{list(self.reader.glyphs.groups)}, "
@@ -152,6 +180,13 @@ class App(tk.Tk):
         # just destroyed them. Leaving them listed made Esc on the main page --
         # which cancels any recording in progress -- reach for dead widgets.
         self.recorders: dict[str, HotkeyRecorder] = {}
+        self.hud: Hud | None = None
+        self._apply_window_prefs()
+
+        if self.hud_active:
+            self._build_hud()
+            return
+
         self.configure(bg=t.bg)
         self.root.configure(bg=t.bg)
 
@@ -173,6 +208,27 @@ class App(tk.Tk):
 
         self._fit()
 
+    def _hud_theme(self) -> Theme:
+        """The overlay's theme: the panel's, at the overlay's own size."""
+        return Theme(
+            dark=self.theme.dark,
+            accent_key=self.theme.accent_key,
+            scale=self.theme.scale * max(0.6, min(1.5, self.cfg.hud_size)),
+        )
+
+    def _build_hud(self) -> None:
+        """The overlay: one canvas, no chrome, nothing to click."""
+        keyed = self._apply_colour_key(True)
+        self.configure(bg=HUD_KEY if keyed else self.theme.bg)
+        self.root.configure(bg=HUD_KEY if keyed else self.theme.bg)
+        self.hud = Hud(
+            self.root, self._hud_theme(),
+            on_move=self._save_window_pos, on_exit=self._toggle_hud,
+        )
+        self.hud.set_keyed(keyed)
+        self.hud.pack(fill="both", expand=True)
+        self._refresh()
+
     def _fit(self) -> None:
         """Resize to the content.
 
@@ -181,6 +237,13 @@ class App(tk.Tk):
         chrome to grow on its own.
         """
         self.update_idletasks()
+        if self.hud_active and self.hud is not None:
+            width, height = self.hud.wanted()
+            # Only the size is forced. The position is left exactly as it is,
+            # so switching modes does not move the window out from under the
+            # eye that was looking at it.
+            self.geometry(f"{width}x{height}")
+            return
         self.geometry(f"{self.theme.px(WINDOW_WIDTH)}x{self.winfo_reqheight()}")
 
     # -- title bar ------------------------------------------------------
@@ -212,6 +275,9 @@ class App(tk.Tk):
         IconButton(
             bar, t, "⚙", self._toggle_settings, font_size=12
         ).pack(side="right", padx=t.px(1))
+        IconButton(bar, t, "◇", self._toggle_hud, font_size=12).pack(
+            side="right", padx=t.px(1)
+        )
 
         for widget in (bar, mark, title):
             widget.bind("<Button-1>", self._drag_start)
@@ -229,6 +295,9 @@ class App(tk.Tk):
 
     def _drag_end(self, _event: tk.Event) -> None:
         self._drag_origin = None
+        self._save_window_pos()
+
+    def _save_window_pos(self) -> None:
         self.cfg.window_pos = (self.winfo_x(), self.winfo_y())
         self.cfg.save()
 
@@ -336,22 +405,97 @@ class App(tk.Tk):
     def _build_settings(self) -> None:
         t = self.theme
         pad = t.px(10)
-        area = ScrollArea(self.content, t, height=440)
+        # The page is far taller than any window should be, so it scrolls --
+        # but a viewport fixed at 440 px showed a quarter of it at a time and
+        # buried whole sections behind a 6 px bar. Take what the screen can
+        # spare instead, leaving room for the title bar, the Done button and
+        # the taskbar.
+        area = ScrollArea(
+            self.content, t,
+            height=max(380, min(760, int(self.winfo_screenheight() / t.scale) - 260)),
+        )
         area.pack(fill="both", expand=True, padx=pad, pady=(pad, 0))
         body = area.body
         body.configure(bg=t.bg)
+
+        # --- the overlay ------------------------------------------------
+        # First on the page: it is the mode the app is used in, and which
+        # figures it shows is the setting people come here to change.
+        card = self._section(
+            body, "Overlay",
+            "Bare figures on a see-through background, for keeping on the "
+            "game screen.",
+        )
+        row = Row(card, t, "Transparent overlay",
+                  f"{pretty_hotkey(self.cfg.hotkey_hud)} switches it either way")
+        row.pack(fill="x")
+        Toggle(row, t, self.cfg.hud, self._on_hud).pack(side="right")
+
+        tk.Label(
+            card, text="SHOW", bg=t.surface, fg=t.faint, font=t.sans(8, "bold"),
+            anchor="w",
+        ).pack(fill="x", pady=(t.px(12), t.px(4)))
+        ChipRow(
+            card, t, list(HUD_FIELDS),
+            {key: getattr(self.cfg, key) for key, _label in HUD_FIELDS},
+            self._on_hud_field, width=WINDOW_WIDTH - 56,
+        ).pack(fill="x")
+        tk.Label(
+            card,
+            text="Height is the climb or drop to the target. Switch the "
+                 "elevation off and the range and azimuth take its place, "
+                 "which is the smallest the overlay gets.",
+            bg=t.surface, fg=t.faint, font=t.sans(8), justify="left", anchor="w",
+            wraplength=t.px(WINDOW_WIDTH - 56),
+        ).pack(fill="x", pady=(t.px(6), 0))
+
+        row = Row(card, t, "Text size")
+        row.pack(fill="x", pady=(t.px(12), 0))
+        self.hud_size_value = tk.Label(
+            row, text=f"{self.cfg.hud_size:.2f}×", bg=t.surface, fg=t.muted,
+            font=t.mono(8), width=5, anchor="e",
+        )
+        self.hud_size_value.pack(side="right", padx=(t.px(6), 0))
+        Slider(row, t, self.cfg.hud_size, self._on_hud_size, minimum=0.6,
+               maximum=1.5, width=130).pack(side="right")
+
+        row = Row(card, t, "Opacity")
+        row.pack(fill="x", pady=(t.px(10), 0))
+        self.hud_opacity_value = tk.Label(
+            row, text=f"{int(self.cfg.hud_opacity * 100)}%", bg=t.surface, fg=t.muted,
+            font=t.mono(8), width=5, anchor="e",
+        )
+        self.hud_opacity_value.pack(side="right", padx=(t.px(6), 0))
+        Slider(row, t, self.cfg.hud_opacity, self._on_hud_opacity, minimum=0.3,
+               maximum=1.0, width=130).pack(side="right")
+
+        row = Row(card, t, "One line", "Wider, a third shorter")
+        row.pack(fill="x", pady=(t.px(10), 0))
+        Toggle(row, t, self.cfg.hud_one_line, self._on_hud_one_line).pack(side="right")
+
+        row = Row(
+            card, t, "Clicks pass through",
+            "The game gets every click — but the overlay can no longer be dragged",
+        )
+        row.pack(fill="x", pady=(t.px(10), 0))
+        Toggle(row, t, self.cfg.hud_click_through, self._on_hud_click_through).pack(
+            side="right"
+        )
+        tk.Label(
+            card,
+            text=f"Double-click the overlay, or press "
+                 f"{pretty_hotkey(self.cfg.hotkey_hud)}, to come back here. "
+                 f"With clicks passing through, the hotkey is the only way.",
+            bg=t.surface, fg=t.faint, font=t.sans(8), justify="left", anchor="w",
+            wraplength=t.px(WINDOW_WIDTH - 56),
+        ).pack(fill="x", pady=(t.px(8), 0))
 
         # --- hotkeys ---------------------------------------------------
         card = self._section(
             body, "Hotkeys", "Click a button, then press the key or mouse button you want"
         )
         self.recorders: dict[str, HotkeyRecorder] = {}
-        rows = (
-            ("hotkey_gun", "Gun position", None),
-            ("hotkey_target", "Target position", None),
-            ("hotkey_reset", "Clear both points", None),
-        )
-        for i, (key, label, hint) in enumerate(rows):
+        for i, (key, label, hint) in enumerate(HOTKEYS):
             row = Row(card, t, label, hint)
             row.pack(fill="x", pady=t.px(4) if i else 0)
             recorder = HotkeyRecorder(
@@ -534,7 +678,7 @@ class App(tk.Tk):
         clash = next(
             (
                 other
-                for other in ("hotkey_gun", "hotkey_target", "hotkey_reset")
+                for other, _label, _hint in HOTKEYS
                 if other != key and getattr(self.cfg, other) == spec
             ),
             None,
@@ -556,11 +700,7 @@ class App(tk.Tk):
         self._set_status(f"Bound {pretty_hotkey(spec)}", "accent")
 
     def _rebind_hotkeys(self, initial: bool = False) -> None:
-        specs = {
-            "hotkey_gun": self.cfg.hotkey_gun,
-            "hotkey_target": self.cfg.hotkey_target,
-            "hotkey_reset": self.cfg.hotkey_reset,
-        }
+        specs = {key: getattr(self.cfg, key) for key, _label, _hint in HOTKEYS}
         try:
             for spec in specs.values():
                 parse_hotkey(spec)
@@ -575,9 +715,10 @@ class App(tk.Tk):
             specs["hotkey_target"], lambda: self.events.put(lambda: self._capture("target"))
         )
         self.listener.bind(specs["hotkey_reset"], lambda: self.events.put(self._reset))
+        self.listener.bind(specs["hotkey_hud"], lambda: self.events.put(self._toggle_hud))
         if not initial:
             self.cfg.save()
-            if self.page == "main" and not self.cfg.compact:
+            if self.page == "main" and not self.cfg.compact and not self.cfg.hud:
                 self._paint_key_chip(self.gun_row["chip"], specs["hotkey_gun"])
                 self._paint_key_chip(self.target_row["chip"], specs["hotkey_target"])
 
@@ -830,7 +971,7 @@ class App(tk.Tk):
 
     def _on_opacity(self, value: float) -> None:
         self.cfg.opacity = round(value, 2)
-        self.opacity_value.config(text=f"{int(self.cfg.opacity * 100)}%")
+        self._show_value("opacity_value", f"{int(self.cfg.opacity * 100)}%")
         try:
             self.attributes("-alpha", max(0.4, min(1.0, self.cfg.opacity)))
         except tk.TclError:
@@ -839,7 +980,7 @@ class App(tk.Tk):
 
     def _on_scale(self, value: float) -> None:
         rounded = round(value * 20) / 20  # snap to 0.05 steps
-        self.scale_value.config(text=f"{rounded:.2f}×")
+        self._show_value("scale_value", f"{rounded:.2f}×")
         if abs(rounded - self.theme.scale) < 0.01:
             return
         self.cfg.ui_scale = rounded
@@ -848,6 +989,58 @@ class App(tk.Tk):
             dark=self.theme.dark, accent_key=self.theme.accent_key, scale=rounded
         )
         self._build()
+
+    def _show_value(self, name: str, text: str) -> None:
+        """Update a settings-page readout, if it is still on screen.
+
+        A slider's own callback can outlive the page it sits on: switching to
+        the overlay destroys the page, and these callbacks are also reachable
+        from a hotkey and from the tests.
+        """
+        label = getattr(self, name, None)
+        if label is not None and label.winfo_exists():
+            label.config(text=text)
+
+    def _on_hud(self, value: bool) -> None:
+        if value != self.cfg.hud:
+            self._toggle_hud()
+
+    def _on_hud_click_through(self, value: bool) -> None:
+        self.cfg.hud_click_through = value
+        self.cfg.save()
+        if self.hud_active:
+            set_click_through(self, value)
+
+    def _on_hud_opacity(self, value: float) -> None:
+        self.cfg.hud_opacity = round(value, 2)
+        self._show_value("hud_opacity_value", f"{int(self.cfg.hud_opacity * 100)}%")
+        if self.hud_active:
+            self._apply_alpha(self.cfg.hud_opacity)
+        self.cfg.save()
+
+    def _on_hud_one_line(self, value: bool) -> None:
+        self.cfg.hud_one_line = value
+        self.cfg.save()
+        if self.hud_active:
+            self._render_hud()
+
+    def _on_hud_size(self, value: float) -> None:
+        rounded = round(value * 20) / 20  # snap to 0.05 steps
+        self._show_value("hud_size_value", f"{rounded:.2f}×")
+        if abs(rounded - self.cfg.hud_size) < 0.01:
+            return
+        self.cfg.hud_size = rounded
+        self.cfg.save()
+        if self.hud is not None:
+            # The size lives in the theme the canvas was built with.
+            self.hud.theme = self._hud_theme()
+            self._render_hud()
+
+    def _on_hud_field(self, key: str, value: bool) -> None:
+        setattr(self.cfg, key, value)
+        self.cfg.save()
+        if self.hud_active:
+            self._render_hud()
 
     def _on_topmost(self, value: bool) -> None:
         self.cfg.always_on_top = value
@@ -863,6 +1056,19 @@ class App(tk.Tk):
         self.page = "main" if self.page == "settings" else "settings"
         self._build()
 
+    def _toggle_hud(self) -> None:
+        """Swap the panel for the overlay, or back.
+
+        Bound to a hotkey as well as to the title bar, because the overlay
+        has no title bar and, with clicks passing through, nothing at all to
+        aim at -- the hotkey is then the only way back.
+        """
+        self._cancel_recording()
+        self.cfg.hud = not self.cfg.hud
+        self.cfg.save()
+        self.page = "main"
+        self._build()
+
     def _toggle_compact(self) -> None:
         self.cfg.compact = not self.cfg.compact
         self.cfg.save()
@@ -872,17 +1078,57 @@ class App(tk.Tk):
     # ==================================================================
     # rendering
     # ==================================================================
+    @property
+    def hud_active(self) -> bool:
+        """Whether the overlay is what is on screen right now.
+
+        The settings page is always the panel: the overlay has no room for it
+        and no way to reach it.
+        """
+        return self.cfg.hud and self.page == "main"
+
+    def _apply_colour_key(self, keyed: bool) -> bool:
+        """Punch the key colour out of the window, or stop doing so.
+
+        Returns whether it took. Nothing but Windows offers this, and a HUD
+        that cannot be transparent is still a much smaller HUD, so a refusal
+        is passed back rather than raised.
+        """
+        try:
+            self.attributes("-transparentcolor", HUD_KEY if keyed else "")
+        except tk.TclError:
+            return False
+        return keyed
+
     def _apply_window_prefs(self) -> None:
         self.title("WARDOGS Artillery")
         try:
             self.iconbitmap(str(resource_dir() / "icon.ico"))
         except tk.TclError:
             pass
+        if self.hud_active:
+            # An overlay behind the game is not an overlay, so this one is
+            # topmost whatever the panel's setting says.
+            self.attributes("-topmost", True)
+            self._apply_alpha(self.cfg.hud_opacity)
+            set_click_through(self, self.cfg.hud_click_through)
+            self._place()
+            return
+
+        self._apply_colour_key(False)
+        set_click_through(self, False)
         self.attributes("-topmost", self.cfg.always_on_top)
-        try:
-            self.attributes("-alpha", max(0.4, min(1.0, self.cfg.opacity)))
-        except tk.TclError:
-            pass
+        self._apply_alpha(self.cfg.opacity)
+        self._place()
+
+    def _place(self) -> None:
+        """Put the window at its remembered spot.
+
+        Both modes share one position, and switching between them keeps it:
+        the overlay is meant to appear where you were already looking, and
+        with clicks passing through it cannot be dragged to a place of its
+        own anyway.
+        """
         if self.cfg.window_pos:
             x, y = self.cfg.window_pos
         else:
@@ -892,6 +1138,12 @@ class App(tk.Tk):
             y = max(40, self.winfo_screenheight() // 2 - 220)
         self.geometry(f"+{int(x)}+{int(y)}")
 
+    def _apply_alpha(self, value: float) -> None:
+        try:
+            self.attributes("-alpha", max(0.3, min(1.0, value)))
+        except tk.TclError:
+            pass
+
     def _announce_readiness(self) -> None:
         if not self.reader.trained:
             self._set_status("No font templates — press Train.", "warn")
@@ -899,9 +1151,9 @@ class App(tk.Tk):
         # A config carried over from an earlier version can still hold a digit
         # hotkey, which now lands in the chat line instead of triggering us.
         typing = [
-            pretty_hotkey(spec)
-            for spec in (self.cfg.hotkey_gun, self.cfg.hotkey_target, self.cfg.hotkey_reset)
-            if edits_text(spec)
+            pretty_hotkey(getattr(self.cfg, key))
+            for key, _label, _hint in HOTKEYS
+            if edits_text(getattr(self.cfg, key))
         ]
         if typing:
             self._set_status(
@@ -921,6 +1173,11 @@ class App(tk.Tk):
         self._apply_status()
 
     def _apply_status(self) -> None:
+        if self.hud_active:
+            # The overlay has no status label; it repaints with the status
+            # folded in, so there is nothing to update in place.
+            self._render_hud()
+            return
         label = getattr(self, "status_label", None)
         if label is None or not label.winfo_exists():
             return
@@ -977,9 +1234,133 @@ class App(tk.Tk):
                     font=t.sans(8), anchor="w",
                 ).pack(fill="x")
 
+    # -- the overlay ----------------------------------------------------
+    def _render_hud(self) -> None:
+        """Fill the overlay from the same solution the panel would show."""
+        if self.hud is None:
+            return
+        mission, height_gain, height_note = self._mission()
+        cells = self._hud_cells(mission)
+        # A HUD that narrates itself is noise, so only trouble gets a line:
+        # whatever the panel would have said in warn or danger, then the
+        # reasons a figure is missing, worst first.
+        status: tuple[str, str] | None = None
+        if self._status[1] in ("warn", "danger"):
+            status = self._status
+        elif mission is not None:
+            detail = next(
+                (s.note for s in mission.solutions if not s.in_range and s.note), ""
+            )
+            if detail:
+                status = (detail, "warn")
+            elif height_note:
+                status = (height_note, "warn")
+        self.hud.render(
+            cells, self._hud_meta(mission, height_gain), status,
+            one_line=self.cfg.hud_one_line,
+        )
+        self._fit()
+
+    def _mission(self) -> tuple[FireMission | None, float | None, str]:
+        """The current firing solution, or None while a point is missing.
+
+        The note is why the height correction could not be applied, empty
+        when it was or when it is switched off.
+        """
+        if not (self.gun and self.target):
+            return None, None, ""
+        height_gain, height_note = self._height_gain()
+        return (
+            solve(
+                self.gun, self.target, self.weapons[self.cfg.weapon],
+                self.cfg.metres_per_unit, height_gain,
+            ),
+            height_gain,
+            height_note,
+        )
+
+    def _hud_cells(self, mission: FireMission | None) -> list[tuple[str, str | None, str, str]]:
+        """The big row: the elevations, or the range and azimuth without them."""
+        if not self.cfg.hud_show_elevation:
+            # With the elevation off the measurements move up into the big
+            # row; left in the small line they would be a caption with
+            # nothing above it.
+            if mission is None:
+                return [("", "—", "", "")]
+            return [("", value, unit, "") for value, unit in self._hud_measures(mission)]
+        if mission is None:
+            return [("", "—", "", "")]
+        solutions = mission.solutions
+        cells: list[tuple[str, str | None, str, str]] = []
+        for index, sol in enumerate(solutions):
+            # "high arc" -> "HIGH": the word "arc" is the same on both and
+            # twice its own width in a place measured in pixels.
+            label = sol.arc.split()[0].upper() if len(solutions) > 1 else ""
+            if not sol.in_range:
+                cells.append((label, None, "", self._hud_limit(sol)))
+                continue
+            unit = "mil" if index == len(solutions) - 1 else ""
+            cells.append((label, f"{sol.elevation_mil:.0f}", unit, ""))
+        return cells
+
+    def _hud_limit(self, sol: Solution) -> str:
+        """Two words for why there is no figure; the note says the rest.
+
+        Read off the envelope rather than off ``sol.note``, which is a
+        sentence written for the panel and four times too wide here.
+        """
+        weapon = self.weapons[self.cfg.weapon]
+        # The dial's range, which is what the envelope is judged against: a
+        # slope moves it away from the target's own range.
+        reach = sol.equivalent_range_m
+        if reach is None:
+            # No launch angle passes through the target at all -- the gun has
+            # the reach, the trajectory has the wrong shape.
+            return "no arc fits"
+        if weapon.min_range_m is not None and reach < weapon.min_range_m:
+            return "too close"
+        if weapon.max_range_m is not None and reach > weapon.max_range_m:
+            return "too far"
+        return "no solution"
+
+    def _hud_measures(self, mission: FireMission) -> list[tuple[str, str]]:
+        out = []
+        if self.cfg.hud_show_range:
+            out.append((f"{mission.range_m:,.0f}".replace(",", " "), "m"))
+        if self.cfg.hud_show_azimuth:
+            out.append((f"{mission.azimuth_deg:.1f}°", ""))
+        return out
+
+    def _hud_meta(self, mission: FireMission | None, height_gain: float | None) -> str:
+        """The small line: whatever the big row did not already say."""
+        if mission is None:
+            # Nothing to solve yet, so the line confirms the presses instead:
+            # a point that reads back is a point that was captured.
+            return "  ·  ".join(
+                str(point) if point else f"{pretty_hotkey(key)} {name}"
+                for point, key, name in (
+                    (self.gun, self.cfg.hotkey_gun, "gun"),
+                    (self.target, self.cfg.hotkey_target, "target"),
+                )
+            )
+        parts = []
+        if self.cfg.hud_show_elevation:
+            parts += [f"{value} {unit}".strip() for value, unit in self._hud_measures(mission)]
+        if self.cfg.hud_show_height and height_gain is not None:
+            parts.append(
+                f"{height_gain:+,.0f} m".replace(",", " ")
+                if abs(height_gain) >= 0.5
+                else "level"
+            )
+        return "  ·  ".join(parts)
+
+
     def _refresh(self) -> None:
         t = self.theme
         if self.page != "main":
+            return
+        if self.hud_active:
+            self._render_hud()
             return
 
         if not self.cfg.compact:
@@ -990,17 +1371,13 @@ class App(tk.Tk):
                 )
                 self._paint_dot(row["dot"], point is not None)
 
-        if not (self.gun and self.target):
+        mission, height_gain, height_note = self._mission()
+        if mission is None:
             self._paint_solutions(None)
             self.meta_label.config(text="range —   ·   azimuth —", fg=t.muted)
             self._fit()
             return
 
-        height_gain, height_note = self._height_gain()
-        mission = solve(
-            self.gun, self.target, self.weapons[self.cfg.weapon],
-            self.cfg.metres_per_unit, height_gain,
-        )
         self._paint_solutions(mission)
         distance = f"{mission.range_m:,.0f}".replace(",", " ")
         lines = [
@@ -1044,8 +1421,7 @@ class App(tk.Tk):
 
     # ==================================================================
     def close(self) -> None:
-        self.cfg.window_pos = (self.winfo_x(), self.winfo_y())
-        self.cfg.save()
+        self._save_window_pos()
         self.listener.stop()
         self.reader.close()
         self.destroy()

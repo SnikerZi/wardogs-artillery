@@ -18,6 +18,7 @@ tk = pytest.importorskip("tkinter")
 from wardogs_calc.ballistics import Point  # noqa: E402
 from wardogs_calc.config import Config  # noqa: E402
 from wardogs_calc.reader import ReadResult  # noqa: E402
+from wardogs_calc.ui.widgets import ChipRow, ScrollArea  # noqa: E402
 from wardogs_calc.vision.ocr import Reading  # noqa: E402
 
 
@@ -52,6 +53,11 @@ def app(window):
     window.gun = window.target = None
     window.cfg.hotkey_reset = Config().hotkey_reset
     window.cfg.readout_region = None
+    for name in vars(Config()):
+        if name.startswith("hud_show_"):
+            setattr(window.cfg, name, True)
+    if window.cfg.hud:
+        window._toggle_hud()
     if window.page != "main":
         window._toggle_settings()
     window.update()
@@ -215,6 +221,12 @@ def test_the_terrain_switch_is_in_the_settings_page(app):
     assert any("TERRAIN" in text for text in _all_text(app))
 
 
+def _descendants(widget):
+    for child in widget.winfo_children():
+        yield child
+        yield from _descendants(child)
+
+
 def _all_text(widget):
     out = []
     for child in widget.winfo_children():
@@ -233,3 +245,155 @@ def test_escape_on_the_main_page_after_visiting_settings(app):
     app._toggle_settings()
     app.update()
     app._cancel_recording()
+
+
+# --- the transparent overlay -----------------------------------------------
+
+
+def _hud(app):
+    """Switch to the overlay with a solved mission in it."""
+    app.gun = Point(60.0, 60.0)
+    app.target = Point(63.0, 62.0)
+    if not app.cfg.hud:
+        app._toggle_hud()
+    app._refresh()
+    app.update()
+    return app.hud
+
+
+def test_the_overlay_is_a_fraction_of_the_panel(app):
+    app._refresh()
+    app.update()
+    panel = (app.winfo_width(), app.winfo_height())
+    hud = _hud(app).wanted()
+    assert hud[0] < panel[0] / 2 and hud[1] < panel[1] / 3
+
+
+def test_the_overlay_shows_the_elevation_and_the_measurements(app):
+    _hud(app)
+    mission = app._mission()[0]
+    figure = f"{mission.solutions[0].elevation_mil:.0f}"
+    assert any(figure == value for _label, value, _unit, _note in app._hud_cells(mission))
+    assert "m" in app._hud_meta(mission, app._mission()[1])
+
+
+def test_the_measurements_move_up_when_the_elevation_is_off(app):
+    """Range and azimuth alone are a legitimate -- and shorter -- overlay."""
+    tall = _hud(app).wanted()
+    app.cfg.hud_show_elevation = False
+    app.cfg.hud_show_height = False
+    app._refresh()
+    app.update()
+    short = app.hud.wanted()
+    assert short[1] < tall[1]
+
+    mission = app._mission()[0]
+    values = [value for _label, value, _unit, _note in app._hud_cells(mission)]
+    assert any(value and "." in value for value in values)  # the azimuth
+    assert app._hud_meta(mission, app._mission()[1]) == ""  # nothing left over
+
+
+def test_an_out_of_range_shot_stays_narrow(app):
+    """The panel's note is a sentence; here it has to be two words."""
+    app.gun = Point(60.0, 60.0)
+    app.target = Point(140.0, 140.0)
+    if not app.cfg.hud:
+        app._toggle_hud()
+    app._refresh()
+    app.update()
+    mission = app._mission()[0]
+    notes = [note for _l, value, _u, note in app._hud_cells(mission) if value is None]
+    assert notes and all(len(note) <= 12 for note in notes), notes
+    assert app.hud.wanted()[0] < 320
+
+
+def test_a_warning_reaches_the_overlay(app):
+    """There is no status label to read it off, so it is painted in."""
+    quiet = _hud(app).wanted()
+    app._set_status("no coordinates found in the selected area", "warn")
+    app.update()
+    assert app.hud.wanted()[1] > quiet[1]
+    app._set_status("", "muted")
+
+
+def test_the_overlay_hotkey_brings_the_panel_back(app):
+    _hud(app)
+    assert app.hud is not None
+    app._toggle_hud()
+    app.update()
+    assert app.hud is None
+    assert app.attributes("-transparentcolor") in ("", "{}")
+    assert any("ELEVATION" in text for text in _all_text(app))
+
+
+def test_switching_modes_leaves_the_window_where_it_was(app):
+    """Both modes share one position.
+
+    Giving the overlay its own meant it jumped to a corner on every switch:
+    with clicks passing through it cannot be dragged, so the position it
+    remembered was never one anybody had chosen.
+    """
+    app.cfg.window_pos = (300, 200)
+    app._place()
+    app.update()
+    assert (app.winfo_x(), app.winfo_y()) == (300, 200)
+
+    _hud(app)
+    assert (app.winfo_x(), app.winfo_y()) == (300, 200)
+    assert app.hud.wanted()[0] == app.winfo_width()  # only the size changed
+
+    app._toggle_hud()
+    app.update()
+    assert (app.winfo_x(), app.winfo_y()) == (300, 200)
+
+
+def test_the_overlay_settings_are_on_the_settings_page(app):
+    app._toggle_settings()
+    app.update()
+    text = _all_text(app)
+    assert any("Transparent overlay" in line for line in text)
+    assert any("Clicks pass through" in line for line in text)
+    assert any("Text size" in line for line in text)
+    # The fields are chips on a canvas, so they are not in the label text.
+    chips = next(c for c in _descendants(app) if isinstance(c, ChipRow))
+    assert [label for _key, label in chips._chips] == [
+        "Elevation", "Range", "Azimuth", "Height"
+    ]
+    # Proportional cells: an equal share clips the longest label.
+    edges = chips._bounds()
+    assert edges[0][1] - edges[0][0] > edges[1][1] - edges[1][0]
+
+
+def test_the_text_size_shrinks_the_whole_overlay(app):
+    """One slider, because "smaller" is the request an overlay attracts."""
+    _hud(app)
+    before = app.hud.wanted()
+    app._on_hud_size(0.6)
+    app.update()
+    after = app.hud.wanted()
+    assert after[0] < before[0] and after[1] < before[1]
+    app._on_hud_size(1.0)
+
+
+def test_one_line_trades_height_for_width(app):
+    _hud(app)
+    two_rows = app.hud.wanted()
+    app._on_hud_one_line(True)
+    app.update()
+    one_row = app.hud.wanted()
+    assert one_row[1] < two_rows[1]
+    assert one_row[0] > two_rows[0]
+    app._on_hud_one_line(False)
+
+
+def test_the_settings_page_fits_more_than_a_quarter_of_itself(app):
+    """The overlay switches were buried in a 440 px viewport."""
+    app._toggle_settings()
+    app.update()
+    app.update_idletasks()
+    area = next(c for c in _descendants(app) if isinstance(c, ScrollArea))
+    assert area.canvas.winfo_height() >= 380
+    # And the fields are above the fold now, not 70% of the way down.
+    chips = next(c for c in _descendants(app) if isinstance(c, ChipRow))
+    offset = chips.winfo_rooty() - area.body.winfo_rooty()
+    assert offset < area.canvas.winfo_height()

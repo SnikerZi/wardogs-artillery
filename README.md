@@ -19,7 +19,8 @@ portable: copy the exe anywhere, delete it and nothing is left behind.
 
 1. In game, point at a spot on the map and press your mark-coordinates key.
    The chat opens with a line like `x98.49, y110.30` in the input field.
-2. **F1** — gun position, **F2** — target, **F3** — clear both.
+2. **F1** — gun position, **F2** — target, **F3** — clear both,
+   **F4** — panel or transparent overlay.
 
 The line stays in the chat until the message is sent, so there is no rush.
 Each press overwrites its own point: to re-aim, mark a new spot and press
@@ -44,13 +45,45 @@ against it. Font templates are built in for the two sizes the HUD has been seen
 at, 1440p and 1080p; **Train** is there for a screen that draws them at some
 other size, and a failed read says which case you are in.
 
+### Transparent overlay
+
+**F4** drops the panel for a see-through overlay you can leave sitting on the
+game: bare figures on a background Windows makes invisible, and it stays
+exactly where the panel was — switching modes never moves the window. Every
+string is drawn with a black halo, so it reads over snow as well as over
+shadow. Clicks pass straight through to the game by default, which is also
+why **F4** exists: with nothing to aim at, it is the way back. Turn that off
+under `⚙ → Overlay` and the overlay can be dragged; double-clicking it also
+returns to the panel.
+
+`⚙ → Overlay` is the first section on the settings page. **SHOW** is a row of
+four chips — elevation, range, azimuth, height difference — each switching on
+its own. **Text size** (0.6–1.5×) and **One line** decide the shape. Opacity is
+separate from the panel's: bare text wants more of it than a slab does.
+
+How small it gets, on a 1080p screen, against the panel's 400 × 417 px (7.7%
+of the screen):
+
+| overlay | size | share of 1080p |
+|---|---|---|
+| everything, two rows | 189 × 71 | 0.65% |
+| everything, two rows, 0.7× | 160 × 53 | 0.41% |
+| everything, one line, 0.7× | 221 × 38 | 0.40% |
+| range + azimuth | 184 × 55 | 0.49% |
+| range + azimuth, 0.6× | 114 × 33 | 0.18% |
+| azimuth alone | 99 × 55 | 0.26% |
+
+Fonts and gaps stop shrinking before they stop being legible, so the size
+slider bottoms out around 0.6× rather than dissolving the small line.
+
 ## Settings
 
-The `⚙` button opens six sections: **Hotkeys**, **Coordinates** (strictness,
-readout area, font training), **Terrain** (height correction on/off, which
-map), **Screen capture**, **Appearance** (theme, five accents, opacity,
-0.8–1.6× scale, always-on-top) and **Diagnostics**. Everything applies
-immediately.
+The `⚙` button opens seven sections: **Hotkeys**, **Coordinates**
+(strictness, readout area, font training), **Terrain** (height correction
+on/off, which map), **Screen capture**, **Appearance** (theme, five accents,
+opacity, 0.8–1.6× scale, always-on-top), **Overlay** (transparency,
+click-through, opacity, which figures to show) and **Diagnostics**. Everything
+applies immediately.
 
 **Rebinding:** click the button showing the current key and press what you
 want. Mouse buttons work too — side, middle, right, wheel. Hold
@@ -60,7 +93,7 @@ is reserved, since that is how you operate the app.
 **Why function keys:** the chat input holds keyboard focus while the line is
 being read, so a digit or letter would be typed straight into it. The app
 flags a hotkey that does this. Avoid `F12` (Steam screenshot) and
-`Shift+Tab` (Steam overlay); if F1–F3 are taken in game, F9–F11 are usually
+`Shift+Tab` (Steam overlay); if F1–F4 are taken in game, F9–F11 are usually
 free.
 
 ## How it works
@@ -232,8 +265,8 @@ over at 512 KB. It shows whether the hotkey fired at all, which area was used,
 what each threshold found, what was recognised and how long it took:
 
 ```
-start: v1.1.3, screen (2560, 1440), standard user, config ...\config.json
-  hotkeys f1 / f2 / f3, weapon mortar
+start: v1.2.0, screen (2560, 1440), standard user, config ...\config.json
+  hotkeys f1 / f2 / f3 / f4, weapon mortar
   font: 161 templates in ['wardogs', 'wardogs-1080'], characters .0123456789xy, margin 0.05
   area (358, 475, 665, 187), saved None, default [0.14, ...]
   height correction on, Bakurani 1531x1531 at 8 m, X 20.40..142.80 Y 10.20..132.60
