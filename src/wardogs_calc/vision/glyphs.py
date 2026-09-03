@@ -35,6 +35,20 @@ MIN_MARGIN = 0.05
 #: else stands at roughly the line height.
 SHORT_LABELS = frozenset({".", ","})
 
+#: Height, in screen pixels, of the digits the bundled bank was captured from.
+#: Recovered from the stored templates by inverting the nearest-neighbour
+#: resampling in :func:`normalise`, which is exact while the source is smaller
+#: than CELL: digits came in at 13x9, "1" at 13x3..5, "x" at 10x8, "y" at 14x8
+#: and "." at 2x2.
+#:
+#: Matching itself is scale-free — every template is resampled onto the same
+#: square — but only up to a point, and the point is measurable: the same
+#: readout rendered at 13 px reads 31 times out of 40, at 11 px 27, and at
+#: 10 px not once. So this number is worth reporting next to the size actually
+#: on screen, because a screen drawing the HUD smaller needs the font trained
+#: rather than anything else adjusted.
+BUNDLED_HEIGHT_PX = 13
+
 
 #: A glyph this much shorter than its line can only be a short label.
 #: Normalising to a square throws absolute size away, which lets a stray

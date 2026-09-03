@@ -103,8 +103,11 @@ class App(tk.Tk):
         from ..capture import screen_size
 
         log("=" * 60)
+        # The version leads: without it a log cannot be tied to a build, and
+        # working out which one a report came from by which later lines are
+        # missing is guesswork that has already been got wrong once.
         log(
-            f"start: screen {screen_size()}, "
+            f"start: v{__version__}, screen {screen_size()}, "
             f"{'administrator' if is_elevated() else 'standard user'}, "
             f"config {base_dir() / 'config.json'}"
         )

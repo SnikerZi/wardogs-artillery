@@ -134,3 +134,68 @@ def test_real_positions_still_read():
     ):
         point = parse_coordinates(text, PLAYABLE_X, PLAYABLE_Y)
         assert (point.x, point.y) == pytest.approx(expected)
+
+
+# --- degrading gracefully as the glyphs get smaller ------------------------
+#
+# A full stop is 2x2 px where the pair's comma is 2x4, so segmentation loses
+# the decimal points first and leaves the comma standing. That is the shape a
+# reading takes on a screen smaller than the one the font bank was built on,
+# and it is what the dot-less fallback exists for.
+
+
+def test_recovers_lost_decimal_points_with_the_pair_comma_intact():
+    point = parse_coordinates("x9849, y11030", RANGE)
+    assert (point.x, point.y) == pytest.approx((98.49, 110.30))
+
+
+def test_recovers_when_only_one_axis_lost_its_decimal_point():
+    for text in ("x98.49, y11030", "x9849, y110.30"):
+        point = parse_coordinates(text, RANGE)
+        assert point is not None, text
+        assert (point.x, point.y) == pytest.approx((98.49, 110.30)), text
+
+
+def test_a_dotted_number_is_never_truncated_by_the_fallback():
+    """"x110.30" must not come back as 110: the fallback may not shorten it."""
+    point = parse_coordinates("x110.30, y98.49", RANGE)
+    assert (point.x, point.y) == pytest.approx((110.30, 98.49))
+
+
+def test_an_unreadable_glyph_still_refuses_a_dot_less_reading():
+    for text in ("x98?9, y110.30", "x9849, y110?30", "x9849, y11?30"):
+        assert parse_coordinates(text, RANGE) is None, text
+
+
+def test_a_lost_comma_as_well_as_the_dots_still_reads():
+    point = parse_coordinates("x9849 y11030", RANGE)
+    assert (point.x, point.y) == pytest.approx((98.49, 110.30))
+
+
+def test_a_gap_where_the_decimal_point_was_is_rejoined():
+    for text, expect in (("x98 77, y110 21", (98.77, 110.21)),
+                         ("x98 77. y110 21", (98.77, 110.21)),
+                         ("y67 91 x83 12", (83.12, 67.91))):
+        point = parse_coordinates(text, RANGE)
+        assert point is not None, text
+        assert (point.x, point.y) == pytest.approx(expect), text
+
+
+def test_a_dot_less_reading_is_never_taken_at_face_value():
+    """"y110" is 1.10 with its point knocked out, not 110.
+
+    Reading it as 110 was a way to report a target 21 m from where it is: the
+    readout always prints two decimals, so a bare 110 cannot mean 110.00. With
+    the shipped bounds -- no player stands below Y 16 -- 1.10 is off the map
+    and the reading is refused rather than guessed at.
+    """
+    played_x, played_y = (20.0, 147.0), (16.0, 133.0)
+    assert parse_coordinates("x8312 y110", played_x, played_y) is None
+    point = parse_coordinates("x8312 y11021", played_x, played_y)
+    assert (point.x, point.y) == pytest.approx((83.12, 110.21))
+
+
+def test_the_split_form_wins_over_the_bare_run_of_digits():
+    """"y110 21" must read 110.21, not stop at 110."""
+    point = parse_coordinates("x9884 y110 18", RANGE)
+    assert (point.x, point.y) == pytest.approx((98.84, 110.18))

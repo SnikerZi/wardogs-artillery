@@ -39,8 +39,10 @@ table was read at once the slope moved it. Pick your map once under
 them apart.
 
 If the coordinates do not read on your setup, press **Area** once and drag a
-box around the chat line. Font templates for the HUD are already built in;
-**Train** is only there if your resolution renders them differently.
+box around the chat line — a little wider and taller than the text, not tight
+against it. Font templates are built in for the two sizes the HUD has been seen
+at, 1440p and 1080p; **Train** is there for a screen that draws them at some
+other size, and a failed read says which case you are in.
 
 ## Settings
 
@@ -140,17 +142,40 @@ it needs a shot measured in the game rather than more arithmetic.
 
 ### Reading the coordinates
 
-The readout area is captured, binarised at five thresholds, split into
-connected blobs, matched against a bank of glyph templates and parsed. The
-whole read takes about 20 ms. Recognition anchors on the `x` and `y` labels,
-so clutter beside the line does not matter, and a miss is retried once on a
-box 2.2× wider around the same centre.
+The readout area is captured, binarised at up to seven thresholds — four
+absolute, three read off the crop's own histogram so that a screen drawing the
+HUD smaller is still seen — split into connected blobs, matched against a bank
+of glyph templates and parsed. The whole read takes 20–40 ms. Recognition
+anchors on the `x` and `y` labels, so clutter beside the line does not matter,
+and a miss is retried once on a box 2.2× wider around the same centre.
+
+The bank holds one group per render size, and a line commits to one group
+rather than letting every face vote glyph by glyph. It matters more than it
+sounds: at 1080p the game draws its digits 6×11 where 1440p gives 9×13 —
+narrower relative to their height, not merely smaller, because the rasteriser
+snaps stems to the pixel grid at that size. Templates normalise onto a square,
+so a different aspect is a different shape, and the 1440p group read a real
+1080p line as `.0000 .y.y0062`. With its own group it reads.
 
 Template matching rather than a general OCR engine: the HUD font is fixed, it
 keeps 50 MB of third-party binaries out of the exe, and a font that reads
 badly can be retrained in a dozen keystrokes.
 
-Five guards stand between a bad crop and a wrong firing solution:
+The decimal point is the fragile part. At 1080p it is one or two lit pixels,
+so segmentation loses it, and the gap it leaves measures the same as the space
+after the pair's comma — on a real crop both were 5 px against a 4.7 px
+threshold, so nothing separates them by width. What separates them is shape:
+the readout always prints exactly two decimals, so a number broken by one gap
+with exactly two digits after it can only be that number with its point
+knocked out. That is rejoined; a bare run of digits gets its point put back
+two from the right, and is never read at face value, because a `y110` that
+came off a two-decimal readout means 1.10 and not 110.
+
+The chat input's caret is dropped rather than matched. It is a solid bar
+standing half again taller than the text, and read as a glyph it came back as
+a 9 — turning `y110.18` into an unparseable `y110189`.
+
+Six guards stand between a bad crop and a wrong firing solution:
 
 1. **Both `x` and `y` labels are required.** No "take the first two numbers"
    fallback — that would silently swap the axes one day, which is plausible,
@@ -164,7 +189,11 @@ Five guards stand between a bad crop and a wrong firing solution:
    disagree with each other; correct ones agree.
 4. **An unrecognised glyph comes back as `?`** and invalidates any number it
    touches — `x83.?2` never degrades into `83`.
-5. **The second point cannot equal the first.** The chat line stays put until
+5. **A dot-less reading is never taken literally.** The point goes back two
+   digits from the right or the reading is refused. Accepting `y110` as 110
+   was a way to report a target 21 m from where it stands: in range,
+   well-formed and wrong.
+6. **The second point cannot equal the first.** The chat line stays put until
    sent, so a press without a fresh mark would otherwise report a confident
    range of zero.
 
@@ -203,9 +232,9 @@ over at 512 KB. It shows whether the hotkey fired at all, which area was used,
 what each threshold found, what was recognised and how long it took:
 
 ```
-start: screen (2560, 1440), standard user, config ...\config.json
+start: v1.1.3, screen (2560, 1440), standard user, config ...\config.json
   hotkeys f1 / f2 / f3, weapon mortar
-  font: 135 templates in ['wardogs'], characters .0123456789xy, margin 0.05
+  font: 161 templates in ['wardogs', 'wardogs-1080'], characters .0123456789xy, margin 0.05
   area (358, 475, 665, 187), saved None, default [0.14, ...]
   height correction on, Bakurani 1531x1531 at 8 m, X 20.40..142.80 Y 10.20..132.60
 hotkey: gun
@@ -238,7 +267,7 @@ src/wardogs_calc/
   config.py                 portable config.json
   vision/                   binarisation, segmentation, glyph matching
   ui/                       window, settings, theme, widgets, trainer
-tests/                      202 tests
+tests/                      224 tests
 ```
 
 ## Limits

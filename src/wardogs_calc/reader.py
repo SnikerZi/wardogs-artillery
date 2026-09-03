@@ -16,8 +16,9 @@ from .capture import Region, ScreenCapture, screen_size
 from .config import Config, base_dir, resource_dir
 from .diagnostics import log
 from .vision import GlyphSet, load_glyphs, read_coordinates
+from .vision.glyphs import BUNDLED_HEIGHT_PX
 from .vision.ocr import Reading, recognise_text
-from .vision.segment import binarize_variants
+from .vision.segment import binarize_variants, connected_components, merge_stacked
 
 #: Share of the screen a box may span and still hold one line of the readout.
 #: Height is the telling one: a line of text is wide and short, so a box as
@@ -196,6 +197,7 @@ class CoordinateReader:
                 if attempt == 0
                 else None
             )
+            glyph_note = self._glyph_size_note(variants) if attempt == 0 else ""
         except Exception as exc:  # diagnostics must not break a read
             log(f"  miss {attempt} on {box.as_tuple()}: parse failed ({exc})")
             return
@@ -204,6 +206,35 @@ class CoordinateReader:
             f"  miss {attempt} on {box.as_tuple()}: "
             f"thresholds [{summary or 'none produced anything'}]{detail}"
         )
+        if glyph_note:
+            log(f"    {glyph_note}")
+
+    def _glyph_size_note(self, variants: list[tuple[str, np.ndarray]]) -> str:
+        """How big the text in the crop is, against the size the bank knows.
+
+        The one number that turns "font does not read cleanly" into an
+        instruction: matching survives a smaller render only so far, so a
+        screen drawing the HUD below the bank's own size needs Train, not a
+        different area or a looser strictness.
+        """
+        for _name, mask in variants:
+            blobs = connected_components(mask, min_pixels=2)
+            if len(blobs) < 4:
+                continue
+            tall = [b.height for b in merge_stacked(blobs) if b.height > 2]
+            if len(tall) < 4:
+                continue
+            seen = int(round(float(np.median(tall))))
+            # Below this nothing is a glyph, whatever the game draws: it is
+            # scattered noise, and reporting a size for it would send someone
+            # to the trainer over a crop that holds no text at all.
+            if seen < 5:
+                continue
+            note = f"glyphs on screen ~{seen} px tall, bank built at {BUNDLED_HEIGHT_PX} px"
+            if seen < BUNDLED_HEIGHT_PX - 1:
+                note += " — smaller than the bank reads reliably, press Train"
+            return note
+        return ""
 
     def set_strictness(self, min_margin: float) -> None:
         self.config.match_margin = min_margin

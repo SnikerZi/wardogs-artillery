@@ -21,6 +21,7 @@ from .segment import (
     binarize_variants,
     connected_components,
     drop_oversized,
+    drop_text_cursor,
     group_lines,
     merge_stacked,
 )
@@ -43,9 +44,33 @@ _LABELLED = re.compile(
     re.IGNORECASE,
 )
 
+#: Same, for a readout whose decimal point was lost to segmentation *and*
+#: left a gap wide enough to read as a space, splitting the number in two.
+#:
+#: At 1080p the full stop is one or two lit pixels, so it goes missing on its
+#: own merits, and the hole it leaves measures the same as the space after the
+#: pair's comma -- both 5 px against a 4.7 px threshold on a real crop, so
+#: they cannot be told apart by width. What can be told apart is the shape of
+#: what is left: the readout always prints exactly two decimals, so a number
+#: broken by one gap with exactly two digits after it can only be that number
+#: with its point knocked out. Nothing else about the line has that shape.
+_LABELLED_SPLIT = re.compile(
+    r"(?<![0-9A-Za-z])([XY])\s*[:=]?\s*(-?\d{1,3})[ ](\d{2})(?![0-9?])",
+    re.IGNORECASE,
+)
+
 #: Same, for a readout whose decimal point was lost to segmentation.
+#:
+#: The trailing separator test is ``(?![.,]\d)`` rather than ``(?![.,])``: a
+#: separator only disqualifies the match when digits follow it, which is what
+#: tells this number's own decimal point apart from the comma between the
+#: pair. Refusing every following comma disabled this fallback in exactly the
+#: case it exists for -- the readout is "x98.49, y110.30", so a reading that
+#: lost its decimal points still carries that comma, and "x9849, y11030" was
+#: refused while "x9849 y11030" parsed. The full stop is 2x2 px where the
+#: comma is 2x4, so the stops go first and the comma is left standing.
 _LABELLED_NO_DOT = re.compile(
-    r"(?<![0-9A-Za-z])([XY])\s*[:=]?\s*(-?\d{3,5})(?![0-9?.,])",
+    r"(?<![0-9A-Za-z])([XY])\s*[:=]?\s*(-?\d{3,5})(?![0-9?])(?![.,]\d)",
     re.IGNORECASE,
 )
 
@@ -123,7 +148,7 @@ def _lines_from_mask(
         return [], ""
     lines = [
         line
-        for line in group_lines(drop_oversized(merge_stacked(blobs)))
+        for line in group_lines(drop_text_cursor(drop_oversized(merge_stacked(blobs))))
         if _MIN_LINE_GLYPHS <= len(line) <= _MAX_LINE_GLYPHS
     ]
     if not lines:
@@ -149,25 +174,29 @@ def recognise_text(image: np.ndarray, glyphs: GlyphSet) -> list[tuple[str, float
     return _lines_from_mask(variants[0][1], glyphs)[0]
 
 
-def _repair_decimal(raw: str, low: float, high: float) -> float | None:
-    """Recover a value whose decimal point was lost to segmentation.
+def _in_range(value: float, low: float, high: float) -> float | None:
+    return value if low <= value <= high else None
 
-    The readout always carries two decimals, so ``8312`` is ``83.12``.  Only
-    applied when the literal reading falls outside the map, which makes the
-    fix unambiguous.
+
+def _repair_decimal(raw: str, low: float, high: float) -> float | None:
+    """Read a value whose decimal point was lost to segmentation.
+
+    The point always goes back two digits from the right, and the literal
+    reading is never used.  The readout prints exactly two decimals, so a
+    dot-less ``11021`` is ``110.21`` and a dot-less ``110`` is ``1.10`` --
+    which is off the map and refused.  Taking ``110`` at face value instead
+    was a way to report 110.00 for a target at 110.21: in range, plausible,
+    and 21 m out.
     """
-    value = float(raw.replace(",", "."))
-    if low <= value <= high:
-        return value
     if "." in raw or "," in raw:
-        return None
+        return _in_range(float(raw.replace(",", ".")), low, high)
     digits = raw.lstrip("-")
     if len(digits) < 3:
         return None
     patched = float(f"{digits[:-2]}.{digits[-2:]}")
     if raw.startswith("-"):
         patched = -patched
-    return patched if low <= patched <= high else None
+    return _in_range(patched, low, high)
 
 
 def parse_coordinates(
@@ -184,14 +213,29 @@ def parse_coordinates(
 
     The two axes are bounded separately: the playable strip is much narrower
     than the terrain, and most misreads land outside it.
+
+    Each axis is taken from the dotted form where it has one and the
+    dot-less form otherwise, rather than requiring both axes to have
+    degraded the same way. Segmentation loses a 2x2 px full stop on its own
+    merits, so one axis keeping its decimal point while the other drops it is
+    the ordinary case, not a corner one.
     """
-    for pattern in (_LABELLED, _LABELLED_NO_DOT):
-        labelled = {m.group(1).upper(): m.group(2) for m in pattern.finditer(text)}
-        if "X" in labelled and "Y" in labelled:
-            x = _repair_decimal(labelled["X"], *valid_x)
-            y = _repair_decimal(labelled["Y"], *valid_y)
-            if x is not None and y is not None:
-                return Point(x, y)
+    labelled: dict[str, str] = {}
+    # Most specific first: a dotted reading is taken as it stands, a reading
+    # split by the gap its lost point left is rejoined around that gap, and
+    # only then is a bare run of digits given a point two from the right.
+    # Order decides which reading of "y110 21" wins, and only the middle one
+    # is right.
+    for pattern in (_LABELLED, _LABELLED_SPLIT, _LABELLED_NO_DOT):
+        for match in pattern.finditer(text):
+            groups = match.groups()
+            value = groups[1] if len(groups) < 3 else f"{groups[1]}.{groups[2]}"
+            labelled.setdefault(match.group(1).upper(), value)
+    if "X" in labelled and "Y" in labelled:
+        x = _repair_decimal(labelled["X"], *valid_x)
+        y = _repair_decimal(labelled["Y"], *valid_y)
+        if x is not None and y is not None:
+            return Point(x, y)
     return None
 
 

@@ -8,6 +8,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from wardogs_calc.vision.segment import (  # noqa: E402
     Glyph,
+    binarize_variants,
     connected_components,
     drop_oversized,
     group_lines,
@@ -60,3 +61,51 @@ def test_drop_oversized_removes_map_icons():
     icon = _blob(80, 0, 60, 60)
     assert icon not in drop_oversized(text + [icon])
     assert len(drop_oversized(text + [icon])) == 5
+
+
+# --- a screen that draws the HUD smaller than the font bank was built on ---
+
+
+def _line_crop(lit_pixels, size=(140, 499), fill=24, ink=245):
+    """A dark panel crop carrying `lit_pixels` bright pixels."""
+    crop = np.full(size, float(fill))
+    flat = crop.reshape(-1)
+    flat[: lit_pixels] = ink
+    return np.repeat(crop[:, :, None], 3, axis=2).astype(np.uint8)
+
+
+def test_the_floor_no_longer_deletes_a_faint_line():
+    """22 lit pixels is what a 0.75x render leaves in the higher cuts.
+
+    The old floor of 40 threw those variants away and left recognition with
+    one opinion, which is also the one thing its cross-threshold agreement
+    check cannot work with.
+    """
+    names = [name for name, _ in binarize_variants(_line_crop(22))]
+    assert len(names) >= 3, names
+    assert any(name.startswith("bright>2") for name in names), names
+
+
+def test_a_crop_with_almost_nothing_lit_offers_no_cut_variant():
+    """Otsu is deliberately exempt from the floor; the cuts are not."""
+    variants = binarize_variants(_line_crop(3))
+    cuts = [name for name, _mask in variants if name != "otsu"]
+    assert cuts == [], cuts
+
+
+def test_percentile_cuts_follow_the_text_down():
+    """Text peaking well below 180 is invisible to every absolute cut."""
+    crop = np.full((60, 200), 20.0)
+    crop[20:32, 10:150:3] = 150.0          # faint strokes, under every cut
+    rgb = np.repeat(crop[:, :, None], 3, axis=2).astype(np.uint8)
+    names = [name for name, _ in binarize_variants(rgb)]
+    assert any(name.startswith("p") for name in names), names
+
+
+def test_scenery_still_produces_no_usable_mask():
+    """The percentile cuts must not turn terrain into a candidate line."""
+    rng = np.random.default_rng(4)
+    scene = np.linspace(200, 90, 140)[:, None] + rng.normal(0, 18, (140, 499))
+    rgb = np.repeat(np.clip(scene, 0, 255)[:, :, None], 3, axis=2).astype(np.uint8)
+    for _name, mask in binarize_variants(rgb):
+        assert mask.sum() <= 6000

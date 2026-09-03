@@ -77,17 +77,36 @@ def binarize(rgb: np.ndarray, invert: bool | None = None) -> np.ndarray:
     return ~bright if invert else bright
 
 
-#: A readout is one or two short lines: roughly 600 set pixels at the size the
-#: game draws it. Both bounds are absolute counts rather than shares of the
-#: crop, because the text keeps its size however generously the box is drawn.
-#:
 #: The ceiling is what keeps the app responsive. Labelling is a per-set-pixel
 #: Python loop, so a mask carrying terrain instead of text costs seconds: a
 #: box holding sky and brick reached 67k set pixels and three seconds. Ten
 #: times the text is already far more than any readout, and rejecting the mask
 #: on a numpy sum costs nothing.
-_MIN_TEXT_PIXELS = 40
+#:
+#: The floor is only a cheap "is anything lit here" pre-filter, and it now
+#: sits far below one line of text. It used to be 40 -- about a tenth of the
+#: ~300 pixels the readout lights at the size the font bank was built at --
+#: but lit pixels go as the SQUARE of the glyph height. A screen drawing the
+#: HUD three quarters as large lights only 22 of them through the higher cuts,
+#: measured, so the floor deleted precisely the variants that could still read
+#: the line and left the vote with one opinion. Junk is turned away by
+#: _MIN_LINE_GLYPHS in ocr.py instead, which tests shape rather than area.
+_MIN_TEXT_PIXELS = 12
 _MAX_TEXT_PIXELS = 6000
+
+#: Absolute cuts in 8-bit grey, right for the HUD at the size it was measured
+#: at: near-white text on the panel's flat dark fill.
+_ABSOLUTE_CUTS = (225.0, 205.0, 240.0, 180.0)
+
+#: ...and cuts read off the crop's own histogram, which is what covers a screen
+#: that draws the HUD smaller. Antialiasing spreads a one-pixel stroke across
+#: more than one device pixel there, so its peak brightness drops -- measured
+#: at 114-196 for a 0.75x render, depending where the stroke falls on the pixel
+#: grid -- and a fixed ladder that starts at 180 can sample the wrong part of
+#: the histogram entirely. A percentile follows the text down instead. On a
+#: crop holding scenery rather than a panel these land in the scenery and
+#: produce a mask far over the ceiling, so they cost one numpy sum and go.
+_PERCENTILE_CUTS = (99.5, 98.0, 95.0)
 
 
 def binarize_variants(rgb: np.ndarray) -> list[tuple[str, np.ndarray]]:
@@ -100,10 +119,24 @@ def binarize_variants(rgb: np.ndarray) -> list[tuple[str, np.ndarray]]:
     """
     gray = to_gray(rgb)
     variants: list[tuple[str, np.ndarray]] = []
-    for cut in (225.0, 205.0, 240.0, 180.0):
+    cuts: list[tuple[str, float]] = [(f"bright>{c:.0f}", c) for c in _ABSOLUTE_CUTS]
+    if gray.size:
+        cuts += [
+            (f"p{share:g}>{cut:.0f}", float(cut))
+            for share, cut in zip(
+                _PERCENTILE_CUTS, np.percentile(gray, _PERCENTILE_CUTS)
+            )
+        ]
+    seen: set[int] = set()
+    for name, cut in cuts:
+        # The two ladders often meet on the same threshold, and running one
+        # mask twice only costs another pass through recognition.
+        if int(round(cut)) in seen:
+            continue
+        seen.add(int(round(cut)))
         mask = gray > cut
         if _MIN_TEXT_PIXELS <= mask.sum() <= _MAX_TEXT_PIXELS:
-            variants.append((f"bright>{cut:.0f}", mask))
+            variants.append((name, mask))
     # Otsu earns a place even over the ceiling: it splits the crop into halves
     # by its own histogram, so on a dark chat panel it isolates the text when
     # every absolute cut has missed it.
@@ -123,6 +156,31 @@ def drop_oversized(glyphs: list["Glyph"], factor: float = 2.6) -> list["Glyph"]:
     if median_h <= 0:
         return glyphs
     return [g for g in glyphs if g.height <= factor * median_h]
+
+
+def drop_text_cursor(glyphs: list["Glyph"]) -> list["Glyph"]:
+    """Remove the chat input's caret, which is not a character.
+
+    It is a solid bar standing half again taller than the text, and it sits at
+    the end of what has been typed -- so left in, it is matched as whatever
+    digit it resembles and lands inside the number. On a real crop a 1x18
+    caret came back as a 9, turning "y110.18" into an unparseable "y110189".
+
+    The tests are deliberately all three at once. A "1" is narrow and solid
+    too, but stands at the text's own height, so the height test is what keeps
+    it; and a tall blob that is mostly empty is a bracket or a slash, which
+    drop_oversized is the judge of.
+    """
+    if len(glyphs) < 3:
+        return glyphs
+    median_h = float(np.median([g.height for g in glyphs]))
+    if median_h <= 0:
+        return glyphs
+    return [
+        g
+        for g in glyphs
+        if not (g.height >= 1.35 * median_h and g.width <= 3 and g.mask.mean() > 0.8)
+    ]
 
 
 def connected_components(mask: np.ndarray, min_pixels: int = 4) -> list[Glyph]:

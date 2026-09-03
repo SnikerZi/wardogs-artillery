@@ -146,3 +146,47 @@ def test_the_bank_is_loaded_at_the_configured_margin(tmp_path, monkeypatch):
     reader.set_strictness(0.10)
     assert config.match_margin == 0.10
     assert reader.glyphs.min_margin == 0.10
+
+
+# --- telling the user their screen draws the HUD too small ------------------
+
+
+def _bare_reader():
+    """A reader without a capture backend or a glyph bank."""
+    reader = CoordinateReader.__new__(CoordinateReader)
+    reader.config = Config()
+    return reader
+
+
+def _line_of_marks(height, count=14, ink=245.0, fill=24.0):
+    crop = np.full((60, 240), fill)
+    for i in range(count):
+        crop[20 : 20 + height, 10 + i * 15 : 10 + i * 15 + 6] = ink
+    return np.repeat(crop[:, :, None], 3, axis=2).astype(np.uint8)
+
+
+def test_a_smaller_render_is_named_and_sends_the_user_to_train():
+    from wardogs_calc.vision.segment import binarize_variants
+
+    note = _bare_reader()._glyph_size_note(binarize_variants(_line_of_marks(10)))
+    assert "~10 px" in note
+    assert "13 px" in note
+    assert "Train" in note
+
+
+def test_the_bank_s_own_size_is_reported_without_an_instruction():
+    from wardogs_calc.vision.segment import binarize_variants
+
+    note = _bare_reader()._glyph_size_note(binarize_variants(_line_of_marks(13)))
+    assert "~13 px" in note
+    assert "Train" not in note
+
+
+def test_noise_is_not_given_a_glyph_size():
+    """Scattered specks are not a small font, and must not read as one."""
+    from wardogs_calc.vision.segment import binarize_variants
+
+    rng = np.random.default_rng(2)
+    noise = np.clip(rng.normal(120, 30, (60, 240)), 0, 255)
+    rgb = np.repeat(noise[:, :, None], 3, axis=2).astype(np.uint8)
+    assert _bare_reader()._glyph_size_note(binarize_variants(rgb)) == ""
