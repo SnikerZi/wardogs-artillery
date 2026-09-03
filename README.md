@@ -62,7 +62,8 @@ returns to the panel.
 
 The bands are a test backdrop rather than the game: nothing is drawn but the
 text, so whatever lies underneath shows through — which is also why the halo
-has to be there.
+has to be there. All three screenshots are rendered at 1.3× interface scale,
+so the figures sit larger than the pixel sizes measured below.
 
 `⚙ → Overlay` is the first section on the settings page. **SHOW** is a row of
 four chips — elevation, range, azimuth, height — each switching on its own.
