@@ -7,6 +7,8 @@ in mils to dial on the gun.
 Separate process, no injection into the game: it reads the screen and listens
 for a global hotkey, the same things OBS does.
 
+<img src="docs/panel.png" alt="The panel: elevation for both SPH-2 arcs, range, azimuth, height difference, and the two marked points" width="520">
+
 ## Install
 
 1. Download `wardogs-calc.exe` from [Releases](../../releases/latest).
@@ -56,10 +58,18 @@ why **F4** exists: with nothing to aim at, it is the way back. Turn that off
 under `⚙ → Overlay` and the overlay can be dragged; double-clicking it also
 returns to the panel.
 
+<img src="docs/overlay.png" alt="Three shapes of the overlay over bands of light and dark ground, showing the halo that keeps the text readable on either" width="495">
+
+The bands are a test backdrop rather than the game: nothing is drawn but the
+text, so whatever lies underneath shows through — which is also why the halo
+has to be there.
+
 `⚙ → Overlay` is the first section on the settings page. **SHOW** is a row of
-four chips — elevation, range, azimuth, height difference — each switching on
-its own. **Text size** (0.6–1.5×) and **One line** decide the shape. Opacity is
+four chips — elevation, range, azimuth, height — each switching on its own.
+**Text size** (0.6–1.5×) and **One line** decide the shape. Opacity is
 separate from the panel's: bare text wants more of it than a slab does.
+
+<img src="docs/settings-overlay.png" alt="The Overlay section of the settings page: the transparency switch, the four figure chips, text size, opacity, one line and click-through" width="520">
 
 How small it gets, on a 1080p screen, against the panel's 400 × 417 px (7.7%
 of the screen):
